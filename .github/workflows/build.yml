@@ -55,6 +55,10 @@ jobs:
             sudo touch "$M/$f"
           done
           sudo cp serverless/* tests/validate.py /rootfs/aiempire/
+          # CPU-only runner: Triton crashes at import without a GPU driver ("0 active drivers").
+          # Hide it for this check only; ComfyUI skips it cleanly (ImportError). The real image keeps it.
+          SP=/rootfs/opt/venv/lib/python3.10/site-packages
+          sudo mv $SP/triton $SP/_triton_hidden_for_cpu_ci
       - name: Start ComfyUI on CPU and submit the workflow
         run: |
           for d in proc sys dev; do sudo mount --bind /$d /rootfs/$d; done
