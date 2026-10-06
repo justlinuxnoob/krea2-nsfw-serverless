@@ -1,0 +1,267 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "krea2_turbo_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "9": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "28": {
+    "class_type": "Power Lora Loader (rgthree)",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "9",
+        0
+      ],
+      "lora_1": {
+        "on": true,
+        "lora": "skindetails_krea2_loraholic.safetensors",
+        "strength": 0.5,
+        "strengthTwo": null
+      },
+      "lora_2": {
+        "on": true,
+        "lora": "RawGirlV2_epoch_10.safetensors",
+        "strength": 0.7499999999999991,
+        "strengthTwo": null
+      },
+      "lora_3": {
+        "on": true,
+        "lora": "__CHARACTER_LORA__",
+        "strength": 1,
+        "strengthTwo": null
+      },
+      "lora_4": {
+        "on": true,
+        "lora": "Krea2_TextFusion_Refusal_Reduction.safetensors",
+        "strength": 1,
+        "strengthTwo": null
+      }
+    }
+  },
+  "91": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "shift": 6,
+      "model": [
+        "28",
+        0
+      ]
+    }
+  },
+  "72": {
+    "class_type": "ResolutionSelector",
+    "inputs": {
+      "aspect_ratio": "9:16 (Portrait Widescreen)",
+      "megapixels": 2,
+      "multiple": 32
+    }
+  },
+  "10": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": [
+        "72",
+        0
+      ],
+      "height": [
+        "72",
+        1
+      ],
+      "batch_size": 1
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "28",
+        1
+      ]
+    }
+  },
+  "41": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": [
+        "28",
+        1
+      ]
+    }
+  },
+  "98": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 192760450538007,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "beta57",
+      "denoise": 1,
+      "model": [
+        "91",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "41",
+        0
+      ],
+      "latent_image": [
+        "10",
+        0
+      ]
+    }
+  },
+  "3": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "98",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    }
+  },
+  "109": {
+    "class_type": "Aiorbust_Camera_Look",
+    "inputs": {
+      "enabled": true,
+      "demosaic_pixel_blur": 0.35,
+      "noise_strength": 0.1,
+      "kernel_motion_blur": 1.9,
+      "jpeg_compression": 98,
+      "image": [
+        "3",
+        0
+      ]
+    }
+  },
+  "110": {
+    "class_type": "Aiorbust_Renoise",
+    "inputs": {
+      "seed": 28243191880228,
+      "iso_preset": "ISO 1600",
+      "grain_size": 0.4,
+      "image": [
+        "109",
+        0
+      ]
+    }
+  },
+  "111": {
+    "class_type": "CRT Post-Process Suite",
+    "inputs": {
+      "enable_upscale": false,
+      "upscale_model_path": "1x-ITF-SkinDiffDetail-Lite-v1.pth",
+      "downscale_by": 0.5,
+      "rescale_method": "bicubic",
+      "precision": "auto",
+      "batch_size": 1,
+      "enable_levels": true,
+      "exposure": -0.05,
+      "gamma": 1.05,
+      "brightness": 0,
+      "contrast": 0.98,
+      "saturation": 1.09,
+      "vibrance": -0.04,
+      "enable_color_wheels": false,
+      "lift_r": 0,
+      "lift_g": 0,
+      "lift_b": 0,
+      "gamma_r": 1,
+      "gamma_g": 1,
+      "gamma_b": 1,
+      "gain_r": 1,
+      "gain_g": 1,
+      "gain_b": 1,
+      "enable_temp_tint": false,
+      "temperature": 0,
+      "tint": 0,
+      "enable_sharpen": true,
+      "sharpen_strength": 0.258,
+      "sharpen_radius": 1.055,
+      "sharpen_threshold": 0.03,
+      "enable_small_glow": true,
+      "small_glow_intensity": 0,
+      "small_glow_radius": 1.446,
+      "small_glow_threshold": 0.647,
+      "enable_large_glow": true,
+      "large_glow_intensity": 0.075,
+      "large_glow_radius": 50,
+      "large_glow_threshold": 0.3,
+      "enable_glare": false,
+      "glare_type": "star_4",
+      "glare_intensity": 0.172,
+      "glare_length": 63.043,
+      "glare_angle": 0,
+      "glare_threshold": 0.756,
+      "glare_quality": 28,
+      "glare_ray_width": 1,
+      "enable_chromatic_aberration": false,
+      "ca_strength": 0.001,
+      "ca_edge_fallof": 2,
+      "enable_ca_hue_shift": false,
+      "ca_hue_shift_degrees": 0,
+      "enable_vignette": false,
+      "vignette_strength": 0.131,
+      "vignette_radius": 2.718,
+      "vignette_softness": 4,
+      "enable_radial_blur": false,
+      "radial_blur_type": "spin",
+      "radial_blur_strength": 0.005,
+      "radial_blur_center_x": 0.5,
+      "radial_blur_center_y": 0.25,
+      "radial_blur_falloff": 0.25,
+      "radial_blur_samples": 16,
+      "enable_film_grain": false,
+      "grain_intensity": 0.005,
+      "grain_size": 0.559,
+      "grain_color_amount": 0.015,
+      "enable_lens_distortion": false,
+      "barrel_distortion": 0.008,
+      "image": [
+        "110",
+        0
+      ]
+    }
+  },
+  "112": {
+    "class_type": "SaveImageNoMetadataNode",
+    "inputs": {
+      "filename_prefix": "clean",
+      "format": "JPEG",
+      "quality": 100,
+      "images": [
+        "111",
+        0
+      ]
+    }
+  }
+}

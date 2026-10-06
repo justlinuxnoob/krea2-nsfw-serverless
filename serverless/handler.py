@@ -1,0 +1,203 @@
+"""AI Empire · Krea 2 NSFW Telegram generator: RunPod serverless handler.
+
+Runs workflow_api.json, which is the "AI Empire Krea2 NSFW V1.5 (clean prompt paste)" workflow
+converted 1:1. Every setting is unchanged. Per job only these things change:
+  - the positive prompt (node 6) = what you typed, pasted as-is
+  - LoRA slot 3 (node 28, lora_3) = your character LoRA, downloaded from your link, strength 1.0
+  - new random seeds (KSampler + Renoise), so every message gives a new photo
+
+Job input (sent by the Cloudflare bot):
+  prompt          the full prompt, pasted as-is
+  lora_url        direct link to your character LoRA .safetensors (Dropbox, Google Drive or Hugging Face)
+  telegram_token  your bot token  } when given, the photo is sent straight to this chat
+  chat_id         your chat id    }
+  seed            optional: fixed seed instead of a random one
+Without telegram_token the image comes back as base64 (handy for RunPod's "Requests" test tab).
+"""
+import base64
+import copy
+import hashlib
+import json
+import os
+import random
+import re
+import time
+import uuid
+
+import requests
+
+COMFY = "http://127.0.0.1:8188"
+COMFY_DIR = "/ComfyUI"
+LORA_DIR = os.path.join(COMFY_DIR, "models", "loras")
+OUTPUT_DIR = os.path.join(COMFY_DIR, "output")
+HERE = os.path.dirname(os.path.abspath(__file__))
+WORKFLOW_FILE = os.path.join(HERE, "workflow_api.json")
+
+PROMPT_NODE = "6"
+LORA_NODE = "28"
+CHARACTER_SLOT = "lora_3"
+SEED_NODES = ("98", "110")      # KSampler, Aiorbust Renoise
+OUTPUT_NODE = "112"             # Save Image (no metadata), JPEG 100
+
+
+def log(*a):
+    print("[ai-empire]", *a, flush=True)
+
+
+# ------------------------------------------------------------------ workflow
+def build_workflow(prompt, lora_name=None, seed=None):
+    """The saved workflow with only prompt, character LoRA and seeds filled in."""
+    with open(WORKFLOW_FILE) as f:
+        wf = json.load(f)
+    wf = copy.deepcopy(wf)
+    wf[PROMPT_NODE]["inputs"]["text"] = prompt
+    slot = wf[LORA_NODE]["inputs"][CHARACTER_SLOT]
+    if lora_name:
+        slot["lora"] = lora_name
+        slot["on"] = True
+    else:  # no character LoRA given: leave the slot switched off
+        slot["on"] = False
+    base = int(seed) if seed is not None else random.randint(1, 2**48)
+    for i, node in enumerate(SEED_NODES):
+        wf[node]["inputs"]["seed"] = base + i
+    return wf, base
+
+
+# ------------------------------------------------------------------ ComfyUI
+def wait_for_comfy(timeout=900):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            if requests.get(COMFY + "/system_stats", timeout=5).ok:
+                return
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    raise RuntimeError("ComfyUI did not start (see /tmp/comfyui.log in the worker logs)")
+
+
+def run(wf, timeout=900):
+    r = requests.post(COMFY + "/prompt", json={"prompt": wf, "client_id": str(uuid.uuid4())}, timeout=60)
+    if not r.ok:
+        raise RuntimeError(f"ComfyUI refused the job: {r.text[:800]}")
+    pid = r.json()["prompt_id"]
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        h = requests.get(f"{COMFY}/history/{pid}", timeout=30).json().get(pid)
+        if h:
+            status = h.get("status", {})
+            if status.get("status_str") == "error":
+                msgs = [m for m in status.get("messages", []) if m[0] == "execution_error"]
+                detail = msgs[-1][1] if msgs else {}
+                raise RuntimeError("generation failed: "
+                                   f"{detail.get('node_type', '')} {detail.get('exception_message', 'unknown error')[:300]}")
+            imgs = (h.get("outputs", {}).get(OUTPUT_NODE) or {}).get("images", [])
+            if imgs:
+                img = imgs[0]
+                v = requests.get(f"{COMFY}/view", params={"filename": img["filename"], "subfolder": img.get("subfolder", ""),
+                                                         "type": img.get("type", "output")}, timeout=60)
+                v.raise_for_status()
+                try:  # keep the worker disk clean
+                    os.remove(os.path.join(OUTPUT_DIR, img.get("subfolder", ""), img["filename"]))
+                except OSError:
+                    pass
+                return v.content
+            if status.get("completed"):
+                raise RuntimeError("the workflow finished without an image")
+        time.sleep(0.5)
+    raise RuntimeError("generation timed out")
+
+
+# ------------------------------------------------------------------ LoRA download (cached per worker)
+def drive_id(url):
+    """File id from any Google Drive share link."""
+    m = re.search(r"/file/d/([A-Za-z0-9_-]{10,})", url) or re.search(r"[?&]id=([A-Za-z0-9_-]{10,})", url)
+    return m.group(1) if m else None
+
+
+def direct_link(url):
+    if "drive.google.com" in url or "drive.usercontent.google.com" in url:
+        fid = drive_id(url)
+        if fid:  # confirm=t skips Google's "can't scan this big file for viruses" page
+            return f"https://drive.usercontent.google.com/download?id={fid}&export=download&confirm=t"
+    if "dropbox.com" in url:
+        url = url.replace("dl=0", "dl=1")
+        if "dl=1" not in url:
+            url += ("&" if "?" in url else "?") + "dl=1"
+    if "huggingface.co" in url and "/blob/" in url:
+        url = url.replace("/blob/", "/resolve/")
+    return url
+
+
+def fetch_lora(url):
+    os.makedirs(LORA_DIR, exist_ok=True)
+    name = "char_" + hashlib.sha1(url.encode()).hexdigest()[:12] + ".safetensors"
+    path = os.path.join(LORA_DIR, name)
+    if os.path.exists(path) and os.path.getsize(path) > 1_000_000:
+        return name
+    tmp = path + ".part"
+    log("downloading LoRA")
+    with requests.get(direct_link(url), stream=True, timeout=60, allow_redirects=True) as r:
+        r.raise_for_status()
+        with open(tmp, "wb") as f:
+            for chunk in r.iter_content(8 << 20):
+                f.write(chunk)
+    ok = False
+    if os.path.exists(tmp) and os.path.getsize(tmp) > 1_000_000:
+        with open(tmp, "rb") as f:
+            head = f.read(9)
+        ok = len(head) == 9 and head[8:9] == b"{"  # safetensors: 8-byte length + JSON header
+    if not ok:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise RuntimeError("the LoRA link didn't give me a .safetensors file. Use a direct download link "
+                           "(Dropbox, Google Drive shared with 'Anyone with the link', or Hugging Face).")
+    os.replace(tmp, path)
+    log("LoRA ready", round(os.path.getsize(path) / 1e6), "MB")
+    return name
+
+
+# ------------------------------------------------------------------ Telegram
+def tg(token, method, data=None, files=None):
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/{method}", data=data, files=files, timeout=120)
+        return r.ok and r.json().get("ok", False)
+    except requests.RequestException:
+        return False
+
+
+# ------------------------------------------------------------------ handler
+def handler(job):
+    inp = job.get("input") or {}
+    token, chat = (inp.get("telegram_token") or "").strip(), inp.get("chat_id")
+    try:
+        prompt = (inp.get("prompt") or "").strip()
+        if not prompt:
+            raise RuntimeError("empty prompt")
+        if token and chat:
+            tg(token, "sendChatAction", {"chat_id": chat, "action": "upload_photo"})
+        lora_url = (inp.get("lora_url") or "").strip()
+        lora = fetch_lora(lora_url) if lora_url else None
+        wf, seed = build_workflow(prompt, lora, inp.get("seed"))
+        wait_for_comfy()
+        t0 = time.time()
+        jpg = run(wf)
+        log(f"image ready in {time.time() - t0:.1f}s (seed {seed})")
+        if token and chat:
+            caption = prompt[:1000]
+            files = {"photo": ("photo.jpg", jpg, "image/jpeg")}
+            if not tg(token, "sendPhoto", {"chat_id": chat, "caption": caption}, files):
+                tg(token, "sendDocument", {"chat_id": chat, "caption": caption}, {"document": ("photo.jpg", jpg, "image/jpeg")})
+            return {"ok": True, "seed": seed}
+        return {"ok": True, "seed": seed, "image": base64.b64encode(jpg).decode()}
+    except Exception as e:
+        log("error:", e)
+        if token and chat:
+            tg(token, "sendMessage", {"chat_id": chat, "text": f"⚠️ Something went wrong: {e}"})
+        return {"error": str(e)}
+
+
+if __name__ == "__main__":
+    import runpod  # only needed on RunPod; build_workflow() is importable without it
+
+    runpod.serverless.start({"handler": handler})

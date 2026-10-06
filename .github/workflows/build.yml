@@ -1,0 +1,141 @@
+name: Build serverless image
+
+# ghcr.io/<owner>/krea2-nsfw-serverless:latest =
+#   ghcr.io/<owner>/krea2-nsfw:latest (same ComfyUI + nodes as the pod)
+#   + models baked in (Krea 2 Turbo fp8, Qwen3-VL fp8, Wan 2.1 VAE, skin upscaler, 3 LoRAs)
+#   + RunPod handler in /aiempire (SDK isolated in /opt/rp)
+# Built with `crane append` (layers stacked on the base), so the 20 GB base never gets unpacked here.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "cloudflare/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  BASE: ghcr.io/${{ github.repository_owner }}/krea2-nsfw:latest
+  IMG: ghcr.io/${{ github.repository_owner }}/krea2-nsfw-serverless
+
+jobs:
+  # Start the base image's ComfyUI on CPU and submit our workflow: catches any wrong node / input / option.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with: {tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, docker-images: true, swap-storage: false}
+      - uses: actions/checkout@v4
+      - name: Install crane
+        run: |
+          curl -sL https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz | tar xz crane
+          sudo mv crane /usr/local/bin/
+          echo "${{ secrets.GITHUB_TOKEN }}" | crane auth login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Unpack base image (without CUDA toolkits)
+        run: |
+          sudo mkdir -p /rootfs
+          crane export --platform linux/amd64 "$BASE" - | sudo tar -x -C /rootfs \
+            --exclude='usr/local/cuda*' --exclude='opt/nvidia/nsight*' \
+            --exclude='usr/lib/x86_64-linux-gnu/libcudnn*' --exclude='usr/lib/x86_64-linux-gnu/libcublas*' \
+            --exclude='usr/lib/x86_64-linux-gnu/libnccl*' --exclude='usr/lib/x86_64-linux-gnu/libnpp*' \
+            --exclude='usr/lib/x86_64-linux-gnu/libcusparse*' --exclude='*/.git/*'
+          df -h / | tail -1
+      - name: Dummy models + our files
+        run: |
+          M=/rootfs/ComfyUI/models
+          sudo mkdir -p $M/diffusion_models $M/clip $M/vae $M/upscale_models $M/loras /rootfs/aiempire
+          for f in diffusion_models/krea2_turbo_fp8_scaled.safetensors clip/qwen3vl_4b_fp8_scaled.safetensors \
+                   vae/wan_2.1_vae.safetensors upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth \
+                   loras/skindetails_krea2_loraholic.safetensors loras/RawGirlV2_epoch_10.safetensors \
+                   loras/Krea2_TextFusion_Refusal_Reduction.safetensors loras/char_test.safetensors; do
+            sudo touch "$M/$f"
+          done
+          sudo cp serverless/* tests/validate.py /rootfs/aiempire/
+      - name: Start ComfyUI on CPU and submit the workflow
+        run: |
+          for d in proc sys dev; do sudo mount --bind /$d /rootfs/$d; done
+          sudo cp /etc/resolv.conf /rootfs/etc/resolv.conf
+          sudo chroot /rootfs /bin/bash -c 'cd /ComfyUI && nohup /opt/venv/bin/python main.py --cpu --listen 127.0.0.1 --port 8188 > /tmp/comfyui.log 2>&1 &'
+          for i in $(seq 1 120); do curl -sf http://127.0.0.1:8188/system_stats >/dev/null && break; sleep 5; done
+          grep -iE "IMPORT FAILED|Traceback" /rootfs/tmp/comfyui.log | head -20 | while read -r l; do echo "::warning::comfy: $l"; done
+          if ! curl -sf http://127.0.0.1:8188/system_stats >/dev/null; then
+            echo "::error::ComfyUI did not start: $(tail -c 1500 /rootfs/tmp/comfyui.log | tr '\n' ' ')"; exit 1
+          fi
+          set +e
+          sudo chroot /rootfs /opt/venv/bin/python /aiempire/validate.py > validate.out 2>&1
+          rc=$?
+          cat validate.out
+          echo "::notice::validate: $(tail -c 3000 validate.out | tr '\n' ' ')"
+          exit $rc
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with: {tool-cache: true, android: true, dotnet: true, haskell: true, large-packages: true, docker-images: false, swap-storage: true}
+      - uses: actions/checkout@v4
+      - name: Install crane + tools
+        run: |
+          curl -sL https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz | tar xz crane
+          sudo mv crane /usr/local/bin/
+          sudo apt-get update -qq && sudo apt-get install -y -qq aria2 pigz
+          echo "${{ secrets.GITHUB_TOKEN }}" | crane auth login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Download models (same files and folders as the pod)
+        run: |
+          set -e
+          M=root/ComfyUI/models
+          dl() { aria2c -q -x 16 -s 16 -k 1M --allow-overwrite=true -d "$(dirname "$2")" -o "$(basename "$2")" "$1"; ls -la "$2"; }
+          dl "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors" $M/diffusion_models/krea2_turbo_fp8_scaled.safetensors
+          dl "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/b58e627c376915e49cb6bba978416085aa31767f/text_encoders/qwen3vl_4b_fp8_scaled.safetensors" $M/clip/qwen3vl_4b_fp8_scaled.safetensors
+          dl "https://huggingface.co/dci05049/wan-animate/resolve/main/wan_2.1_vae.safetensors" $M/vae/wan_2.1_vae.safetensors
+          dl "https://huggingface.co/dci05049/krea2/resolve/main/1x-ITF-SkinDiffDetail-Lite-v1.pth" $M/upscale_models/1x-ITF-SkinDiffDetail-Lite-v1.pth
+          dl "https://huggingface.co/dci05049/krea2/resolve/main/skindetails_krea2_loraholic.safetensors" $M/loras/skindetails_krea2_loraholic.safetensors
+          dl "https://huggingface.co/dci05049/krea2/resolve/main/RawGirlV2_epoch_10.safetensors" $M/loras/RawGirlV2_epoch_10.safetensors
+          dl "https://huggingface.co/dci05049/krea2/resolve/main/Krea2_TextFusion_Refusal_Reduction.safetensors" $M/loras/Krea2_TextFusion_Refusal_Reduction.safetensors
+          # every file must be a real safetensors/pth, not an HTML error page
+          for f in $(find $M -type f); do [ "$(stat -c%s "$f")" -gt 1000000 ] || { echo "::error::too small: $f"; exit 1; }; done
+
+      - name: RunPod SDK (isolated) + handler
+        run: |
+          set -e
+          mkdir -p root/opt/rp root/aiempire
+          docker run --rm -v "$PWD/root/opt/rp:/out" ubuntu:22.04 bash -c '
+            apt-get update -qq && apt-get install -y -qq python3-pip >/dev/null &&
+            python3 --version && pip3 install -q --target /out runpod requests'
+          cp serverless/handler.py serverless/workflow_api.json serverless/start.sh root/aiempire/
+          chmod 755 root/aiempire/start.sh
+          sudo chown -R 0:0 root
+
+      - name: Pack layers
+        run: |
+          set -e
+          T="sudo tar --numeric-owner -C root"
+          $T -cf - ComfyUI/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors | pigz -1 > unet.tgz
+          sudo rm root/ComfyUI/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors
+          $T -cf - ComfyUI/models/clip ComfyUI/models/vae ComfyUI/models/upscale_models ComfyUI/models/loras | pigz -1 > models.tgz
+          $T -cf - opt/rp aiempire | pigz -1 > app.tgz
+          ls -la *.tgz; df -h / | tail -1
+
+      - name: Append layers to the base and push
+        run: |
+          set -e
+          crane append --platform linux/amd64 -b "$BASE" -f unet.tgz -f models.tgz -f app.tgz -t "$IMG:build-tmp"
+          crane mutate "$IMG:build-tmp" --cmd /aiempire/start.sh \
+            -l org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            -l org.opencontainers.image.description="AI Empire Krea 2 NSFW serverless worker" \
+            -t "$IMG:latest"
+          crane tag "$IMG:latest" "${{ github.sha }}"
+
+      - name: Check the pushed image
+        run: |
+          set -e
+          crane config "$IMG:latest" | jq -c '.config.Cmd, .config.Entrypoint'
+          LAST=$(crane manifest "$IMG:latest" | jq -r '.layers[-1].digest')
+          crane blob "$IMG@$LAST" | tar -tz | grep -E 'aiempire/(handler.py|start.sh|workflow_api.json)|opt/rp/runpod/__init__.py'
+          echo "::notice::image size $(crane manifest "$IMG:latest" | jq '[.layers[].size] | add / 1e9 | floor') GB"
