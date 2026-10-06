@@ -42,9 +42,10 @@ jobs:
             --exclude='usr/lib/x86_64-linux-gnu/libcudnn*' --exclude='usr/lib/x86_64-linux-gnu/libcublas*' \
             --exclude='usr/lib/x86_64-linux-gnu/libnccl*' --exclude='usr/lib/x86_64-linux-gnu/libnpp*' \
             --exclude='usr/lib/x86_64-linux-gnu/libcusparse*' --exclude='*/.git/*'
-          df -h / | tail -1
+          echo "::notice::disk: $(df -h / | tail -1) | rootfs: $(ls /rootfs | tr '\n' ' ') | ComfyUI: $(ls /rootfs/ComfyUI 2>&1 | head -c 300 | tr '\n' ' ') | models: $(ls -la /rootfs/ComfyUI/models 2>&1 | head -c 900 | tr '\n' ' ')"
       - name: Dummy models + our files
         run: |
+          trap 'echo "::error::dummy step failed at line $LINENO: $BASH_COMMAND"' ERR
           M=/rootfs/ComfyUI/models
           sudo mkdir -p $M/diffusion_models $M/clip $M/vae $M/upscale_models $M/loras /rootfs/aiempire
           for f in diffusion_models/krea2_turbo_fp8_scaled.safetensors clip/qwen3vl_4b_fp8_scaled.safetensors \
