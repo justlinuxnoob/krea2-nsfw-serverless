@@ -69,11 +69,21 @@ def wait_for_comfy(timeout=900):
     while time.time() - t0 < timeout:
         try:
             if requests.get(COMFY + "/system_stats", timeout=5).ok:
+                if time.time() - t0 > 1:
+                    log(f"ComfyUI ready after {time.time() - t0:.0f}s")
                 return
         except requests.RequestException:
             pass
+        if int(time.time() - t0) % 15 == 0:
+            log(f"waiting for ComfyUI... {time.time() - t0:.0f}s")
         time.sleep(1)
-    raise RuntimeError("ComfyUI did not start (see /tmp/comfyui.log in the worker logs)")
+    tail = ""
+    try:
+        with open("/tmp/comfyui.log") as f:
+            tail = f.read()[-600:]
+    except OSError:
+        pass
+    raise RuntimeError(f"ComfyUI did not start. Last log lines: {tail}")
 
 
 def run(wf, timeout=900):
@@ -179,6 +189,7 @@ def handler(job):
         lora_url = (inp.get("lora_url") or "").strip()
         lora = fetch_lora(lora_url) if lora_url else None
         wf, seed = build_workflow(prompt, lora, inp.get("seed"))
+        log("job received, character LoRA:", lora or "none")
         wait_for_comfy()
         t0 = time.time()
         jpg = run(wf)
@@ -200,4 +211,5 @@ def handler(job):
 if __name__ == "__main__":
     import runpod  # only needed on RunPod; build_workflow() is importable without it
 
+    log("worker starting")
     runpod.serverless.start({"handler": handler})
