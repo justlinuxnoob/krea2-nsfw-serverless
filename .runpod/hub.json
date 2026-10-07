@@ -1,0 +1,14 @@
+{
+  "title": "AI Empire · Krea 2 NSFW Telegram Generator",
+  "description": "Text your private Telegram bot, get a photo of your AI character. Runs the AI Empire Krea 2 NSFW V1.5 workflow unchanged, with your character LoRA (Dropbox link) in LoRA slot 3. Pair it with the free Cloudflare bot from the repo.",
+  "type": "serverless",
+  "category": "image",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 20,
+    "gpuIds": "ADA_24,AMPERE_24,AMPERE_48,ADA_48_PRO",
+    "gpuCount": 1,
+    "allowedCudaVersions": ["12.4", "12.5", "12.6", "12.7", "12.8", "12.9", "13.0", "13.1", "13.2"],
+    "env": []
+  }
+}

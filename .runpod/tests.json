@@ -1,0 +1,17 @@
+{
+  "tests": [
+    {
+      "name": "generate_without_character_lora",
+      "input": {
+        "prompt": "a young woman sitting in a cozy cafe by the window, cream knit sweater, soft daylight, candid smartphone photo"
+      },
+      "timeout": 900000
+    }
+  ],
+  "config": {
+    "gpuTypeId": "NVIDIA GeForce RTX 4090",
+    "gpuCount": 1,
+    "env": [],
+    "allowedCudaVersions": ["12.4", "12.5", "12.6", "12.7", "12.8", "12.9", "13.0"]
+  }
+}

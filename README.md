@@ -49,6 +49,10 @@ Settings:
 - **Container disk:** 20 GB
 - **Environment variables:** none
 
+**Or deploy from GitHub** (RunPod builds it from this repo): Serverless → New Endpoint → **GitHub repo** →
+`justlinuxnoob/krea2-nsfw-serverless`. RunPod builds on each **GitHub release**, so publish one first:
+repo → **Releases** → **Draft a new release** → tag `v1.0.0` → **Publish release**. Same settings as above.
+
 Copy the **Endpoint ID**, then make an API key: RunPod → **Settings** → **API Keys**.
 
 ## 4 · Start the bot on Cloudflare (free)

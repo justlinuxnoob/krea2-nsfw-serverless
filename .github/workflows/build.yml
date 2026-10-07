@@ -9,7 +9,7 @@ name: Build serverless image
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", "cloudflare/**"]
+    paths-ignore: ["**.md", "cloudflare/**", ".runpod/**", "Dockerfile"]
   workflow_dispatch:
 
 permissions:
