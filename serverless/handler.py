@@ -17,6 +17,7 @@ Without telegram_token the image comes back as base64 (handy for RunPod's "Reque
 import base64
 import copy
 import hashlib
+import io
 import json
 import os
 import random
@@ -176,15 +177,42 @@ def tg(token, method, data=None, files=None):
         return False
 
 
+# ------------------------------------------------------------------ photo details
+JOBS_DONE = 0  # per worker: the first job after a worker boots is a cold start
+
+
+def image_size(data):
+    try:
+        from PIL import Image
+        return Image.open(io.BytesIO(data)).size
+    except Exception:
+        return None
+
+
+def caption_for(prompt, gen_s, setup_s, cold, seed, size, lora_on):
+    speed = f"✅ Done in {gen_s:.1f}s"
+    speed += f" · ❄️ cold start (+{setup_s:.0f}s wake-up)" if cold else " · ⚡ warm"
+    info = f"🎲 Seed {seed}"
+    if size:
+        info += f" · 📐 {size[0]}×{size[1]}"
+    info += " · 🧬 LoRA " + ("on" if lora_on else "off")
+    head = f"{speed}\n{info}\n\n"
+    return head + prompt[: 1000 - len(head)]  # margin: Telegram counts emoji as 2
+
+
 # ------------------------------------------------------------------ handler
 def handler(job):
+    global JOBS_DONE
+    t_job = time.time()
+    cold = JOBS_DONE == 0
     inp = job.get("input") or {}
     token, chat = (inp.get("telegram_token") or "").strip(), inp.get("chat_id")
+    notify = bool(token and chat)
     try:
         prompt = (inp.get("prompt") or "").strip()
         if not prompt:
             raise RuntimeError("empty prompt")
-        if token and chat:
+        if notify:
             tg(token, "sendChatAction", {"chat_id": chat, "action": "upload_photo"})
         lora_url = (inp.get("lora_url") or "").strip()
         lora = fetch_lora(lora_url) if lora_url else None
@@ -193,19 +221,24 @@ def handler(job):
         wait_for_comfy()
         t0 = time.time()
         jpg = run(wf)
-        log(f"image ready in {time.time() - t0:.1f}s (seed {seed})")
-        if token and chat:
-            caption = prompt[:1000]
+        gen_s, setup_s = time.time() - t0, t0 - t_job
+        JOBS_DONE += 1
+        log(f"image ready in {gen_s:.1f}s (seed {seed}, setup {setup_s:.0f}s, cold={cold})")
+        result = {"ok": True, "seed": seed, "gen_seconds": round(gen_s, 1),
+                  "setup_seconds": round(setup_s, 1), "cold": cold, "lora": bool(lora)}
+        if notify:
+            caption = caption_for(prompt, gen_s, setup_s, cold, seed, image_size(jpg), bool(lora))
             files = {"photo": ("photo.jpg", jpg, "image/jpeg")}
             if not tg(token, "sendPhoto", {"chat_id": chat, "caption": caption}, files):
                 tg(token, "sendDocument", {"chat_id": chat, "caption": caption}, {"document": ("photo.jpg", jpg, "image/jpeg")})
-            return {"ok": True, "seed": seed}
-        return {"ok": True, "seed": seed, "image": base64.b64encode(jpg).decode()}
+            return {**result, "notified": True}
+        return {**result, "image": base64.b64encode(jpg).decode()}
     except Exception as e:
         log("error:", e)
-        if token and chat:
-            tg(token, "sendMessage", {"chat_id": chat, "text": f"⚠️ Something went wrong: {e}"})
-        return {"error": str(e)}
+        sent = notify and tg(token, "sendMessage", {"chat_id": chat, "text": f"⚠️ Something went wrong: {e}"})
+        # no "error" key on purpose: the bot already told the chat, so the job ends normally with ok=false
+        # (a real crash or timeout still reaches the bot through RunPod's webhook and gets reported there)
+        return {"ok": False, "message": str(e), "notified": bool(sent)}
 
 
 if __name__ == "__main__":

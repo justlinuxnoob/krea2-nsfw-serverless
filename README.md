@@ -42,7 +42,7 @@ ghcr.io/justlinuxnoob/krea2-nsfw-serverless:latest
 
 Settings:
 
-- **GPU:** 24 GB (4090 / 3090 / L4…). Out-of-memory errors? Use 48 GB.
+- **GPU:** 24 GB or 48 GB tiers (4090, 3090, L40S, A6000, RTX 6000 Ada). **Not** the 32 GB (5090) or 96 GB (RTX Pro 6000) tiers: Blackwell cards don't run this image.
 - **Max workers:** 1
 - **Idle timeout:** 5 s
 - **FlashBoot:** on
@@ -69,9 +69,25 @@ Copy the **Endpoint ID**, then make an API key: RunPod → **Settings** → **AP
 | `LORA_URL` | your LoRA link from step 1 |
 | `OWNER_ID` | leave empty for now |
 
+Optional, for `/stats`:
+
+- **History:** Cloudflare → **Storage & Databases → KV** → **Create** (name it `bot-stats`). Then your Worker →
+  **Settings → Bindings → Add → KV namespace**, variable name **`STATS`**, pick `bot-stats` → **Deploy**.
+- **Cost:** add `GPU_PRICE_PER_SECOND` = your GPU's serverless price per second from RunPod's pricing page.
+
 4. Deploy, then open `https://<your-worker>.workers.dev/setup` → **"Bot connected!"**
 5. Message your bot. It replies with **your Telegram ID**.
 6. Put that number in `OWNER_ID` → **Deploy**. Done. (More people: IDs separated by commas.)
+
+## In Telegram
+
+- Every photo comes with a details line: generation time, cold start or warm, seed, size, character LoRA on/off,
+  then your prompt.
+- **`/stats`**: photos made (total / today / this week), average generation time, cold starts, failures,
+  GPU time and cost, and whether the GPU is working, idle or asleep right now.
+- If the GPU worker crashes or times out, the bot tells you (RunPod reports back to the bot when a job ends).
+- Telegram may blur NSFW photos ("sensitive content"). That's Telegram, not the bot: Settings → Privacy and
+  Security → Sensitive content → Disable filtering (on iPhone, switch it in Telegram Desktop or web.telegram.org).
 
 ## Speed
 
